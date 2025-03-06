@@ -7,7 +7,9 @@ from torch import nn
 from torch.nn.init import Tensor, trunc_normal_
 
 
-SampleMods = Literal['conv', 'pixelshuffledirect', 'pixelshuffle', 'nearest+conv', 'dysample']
+SampleMods = Literal[
+    "conv", "pixelshuffledirect", "pixelshuffle", "nearest+conv", "dysample"
+]
 
 
 class DySample(nn.Module):
@@ -27,7 +29,7 @@ class DySample(nn.Module):
         super().__init__()
 
         if in_channels <= groups or in_channels % groups != 0:
-            msg = 'Incorrect in_channels and groups values.'
+            msg = "Incorrect in_channels and groups values."
             raise ValueError(msg)
 
         out_channels = 2 * groups * scale**2
@@ -43,11 +45,16 @@ class DySample(nn.Module):
             nn.init.trunc_normal_(self.offset.weight, std=0.02)
             nn.init.constant_(self.scope.weight, val=0)
 
-        self.register_buffer('init_pos', self._init_pos())
+        self.register_buffer("init_pos", self._init_pos())
 
     def _init_pos(self) -> Tensor:
         h = torch.arange((-self.scale + 1) / 2, (self.scale - 1) / 2 + 1) / self.scale
-        return torch.stack(torch.meshgrid([h, h], indexing='ij')).transpose(1, 2).repeat(1, self.groups, 1).reshape(1, -1, 1, 1)
+        return (
+            torch.stack(torch.meshgrid([h, h], indexing="ij"))
+            .transpose(1, 2)
+            .repeat(1, self.groups, 1)
+            .reshape(1, -1, 1, 1)
+        )
 
     def forward(self, x: Tensor) -> Tensor:
         offset = self.offset(x) * self.scope(x).sigmoid() * 0.5 + self.init_pos
@@ -57,14 +64,16 @@ class DySample(nn.Module):
         coords_w = torch.arange(W) + 0.5
 
         coords = (
-            torch.stack(torch.meshgrid([coords_w, coords_h], indexing='ij'))
+            torch.stack(torch.meshgrid([coords_w, coords_h], indexing="ij"))
             .transpose(1, 2)
             .unsqueeze(1)
             .unsqueeze(0)
             .type(x.dtype)
             .to(x.device, non_blocking=True)
         )
-        normalizer = torch.tensor([W, H], dtype=x.dtype, device=x.device, pin_memory=True).view(1, 2, 1, 1, 1)
+        normalizer = torch.tensor(
+            [W, H], dtype=x.dtype, device=x.device, pin_memory=True
+        ).view(1, 2, 1, 1, 1)
         coords = 2 * (coords + offset) / normalizer - 1
 
         coords = (
@@ -77,9 +86,9 @@ class DySample(nn.Module):
         output = F.grid_sample(
             x.reshape(B * self.groups, -1, H, W),
             coords,
-            mode='bilinear',
+            mode="bilinear",
             align_corners=False,
-            padding_mode='border',
+            padding_mode="border",
         ).view(B, -1, self.scale * H, self.scale * W)
 
         if self.end_convolution:
@@ -100,21 +109,27 @@ class UniUpsample(nn.Sequential):
     ) -> None:
         m = []
 
-        if scale == 1 or upsample == 'conv':
+        if scale == 1 or upsample == "conv":
             m.append(nn.Conv2d(in_dim, out_dim, 3, 1, 1))
-        elif upsample == 'pixelshuffledirect':
-            m.extend([nn.Conv2d(in_dim, out_dim * scale**2, 3, 1, 1), nn.PixelShuffle(scale)])
-        elif upsample == 'pixelshuffle':
+        elif upsample == "pixelshuffledirect":
+            m.extend(
+                [nn.Conv2d(in_dim, out_dim * scale**2, 3, 1, 1), nn.PixelShuffle(scale)]
+            )
+        elif upsample == "pixelshuffle":
             m.extend([nn.Conv2d(in_dim, mid_dim, 3, 1, 1), nn.LeakyReLU(inplace=True)])
             if (scale & (scale - 1)) == 0:  # scale = 2^n
                 for _ in range(int(math.log2(scale))):
-                    m.extend([nn.Conv2d(mid_dim, 4 * mid_dim, 3, 1, 1), nn.PixelShuffle(2)])
+                    m.extend(
+                        [nn.Conv2d(mid_dim, 4 * mid_dim, 3, 1, 1), nn.PixelShuffle(2)]
+                    )
             elif scale == 3:
                 m.extend([nn.Conv2d(mid_dim, 9 * mid_dim, 3, 1, 1), nn.PixelShuffle(3)])
             else:
-                raise ValueError(f'scale {scale} is not supported. Supported scales: 2^n and 3.')
+                raise ValueError(
+                    f"scale {scale} is not supported. Supported scales: 2^n and 3."
+                )
             m.append(nn.Conv2d(mid_dim, out_dim, 3, 1, 1))
-        elif upsample == 'nearest+conv':
+        elif upsample == "nearest+conv":
             if (scale & (scale - 1)) == 0:
                 for _ in range(int(math.log2(scale))):
                     m.extend(
@@ -141,21 +156,27 @@ class UniUpsample(nn.Sequential):
                     )
                 )
             else:
-                raise ValueError(f'scale {scale} is not supported. Supported scales: 2^n and 3.')
+                raise ValueError(
+                    f"scale {scale} is not supported. Supported scales: 2^n and 3."
+                )
             m.append(nn.Conv2d(in_dim, out_dim, 3, 1, 1))
-        elif upsample == 'dysample':
+        elif upsample == "dysample":
             if mid_dim != in_dim:
-                m.extend([nn.Conv2d(in_dim, mid_dim, 3, 1, 1), nn.LeakyReLU(inplace=True)])
+                m.extend(
+                    [nn.Conv2d(in_dim, mid_dim, 3, 1, 1), nn.LeakyReLU(inplace=True)]
+                )
                 dys_dim = mid_dim
             else:
                 dys_dim = in_dim
             m.append(DySample(dys_dim, out_dim, scale, group))
         else:
-            raise ValueError(f'An invalid Upsample was selected. Please choose one of {SampleMods}')
+            raise ValueError(
+                f"An invalid Upsample was selected. Please choose one of {SampleMods}"
+            )
         super().__init__(*m)
 
         self.register_buffer(
-            'MetaUpsample',
+            "MetaUpsample",
             torch.tensor(
                 [
                     2,  # Block version, if you change something, please number from the end so that you can distinguish between authorized changes and third parties
@@ -184,7 +205,9 @@ class InceptionDWConv2d(nn.Module):
         super().__init__()
 
         gc = int(in_channels * branch_ratio)  # channel numbers of a convolution branch
-        self.dwconv_hw = nn.Conv2d(gc, gc, square_kernel_size, padding=square_kernel_size // 2, groups=gc)
+        self.dwconv_hw = nn.Conv2d(
+            gc, gc, square_kernel_size, padding=square_kernel_size // 2, groups=gc
+        )
         self.dwconv_w = nn.Conv2d(
             gc,
             gc,
@@ -224,6 +247,25 @@ class RMSNorm(nn.Module):
         return self.scale * x_normed + self.offset
 
 
+class LayerNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+        self.eps = eps
+        self.dim = (dim,)
+
+    def forward(self, x):
+        if x.is_contiguous(memory_format=torch.channels_last):
+            return F.layer_norm(
+                x.permute(0, 2, 3, 1), self.dim, self.weight, self.bias, self.eps
+            ).permute(0, 3, 1, 2)
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        return self.weight[:, None, None] * x + self.bias[:, None, None]
+
+
 class GatedCNNBlock(nn.Module):
     r"""
     modernized mambaout main unit
@@ -231,12 +273,10 @@ class GatedCNNBlock(nn.Module):
     """
 
     def __init__(
-        self,
-        dim: int = 64,
-        expansion_ratio: float = 8 / 3,
+        self, dim: int = 64, expansion_ratio: float = 8 / 3, rms_norm: bool = True
     ) -> None:
         super().__init__()
-        self.norm = RMSNorm(dim)
+        self.norm = RMSNorm(dim) if rms_norm else LayerNorm(dim)
         hidden = int(expansion_ratio * dim)
         self.fc1 = nn.Conv2d(dim, hidden * 2, 3, 1, 1)
 
@@ -274,13 +314,14 @@ class MoSRv2(nn.Module):
         scale: int = 4,
         n_block: int = 24,
         dim: int = 64,
-        upsampler: SampleMods = 'pixelshuffledirect',
+        upsampler: SampleMods = "pixelshuffledirect",
         expansion_ratio: float = 1.5,
         mid_dim=32,
         unshuffle_mod: bool = True,
+        rms_norm: bool = False,
     ) -> None:
         super().__init__()
-        self.short = nn.Upsample(scale_factor=scale, mode='bilinear')
+        self.short = nn.Upsample(scale_factor=scale, mode="bilinear")
         self.scale = scale
         self.pad = 1
         if unshuffle_mod and scale < 3:
@@ -298,8 +339,7 @@ class MoSRv2(nn.Module):
             *in_to_dim
             + [
                 GatedCNNBlock(
-                    dim=dim,
-                    expansion_ratio=expansion_ratio,
+                    dim=dim, expansion_ratio=expansion_ratio, rms_norm=rms_norm
                 )
                 for _ in range(n_block)
             ]
@@ -314,13 +354,13 @@ class MoSRv2(nn.Module):
         self.to_img = UniUpsample(upsampler, scale, dim, in_ch, mid_dim)
 
     def load_state_dict(self, state_dict, *args, **kwargs):
-        state_dict['to_img.MetaUpsample'] = self.to_img.MetaUpsample
+        state_dict["to_img.MetaUpsample"] = self.to_img.MetaUpsample
         return super().load_state_dict(state_dict, *args, **kwargs)
 
     def check_img_size(self, x: Tensor, h: int, w: int) -> Tensor:
         mod_pad_h = (self.pad - h % self.pad) % self.pad
         mod_pad_w = (self.pad - w % self.pad) % self.pad
-        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
+        return F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
 
     def forward(self, x: Tensor) -> Tensor:
         b, c, h, w = x.shape

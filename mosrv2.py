@@ -10,6 +10,7 @@ from torch.nn.init import Tensor, trunc_normal_
 SampleMods = Literal[
     "conv", "pixelshuffledirect", "pixelshuffle", "nearest+conv", "dysample"
 ]
+NormType = Literal["rms", "layer", "dyt"]
 
 
 class DySample(nn.Module):
@@ -236,8 +237,8 @@ class RMSNorm(nn.Module):
     def __init__(self, dim: int = 64, eps: float = 1e-6) -> None:
         super().__init__()
         self.eps = eps
-        self.scale = nn.Parameter(torch.ones(dim, 1, 1))
-        self.offset = nn.Parameter(torch.zeros(dim, 1, 1))
+        self.scale = nn.Parameter(torch.ones([dim, 1, 1]))
+        self.offset = nn.Parameter(torch.zeros([dim, 1, 1]))
 
     def forward(self, x: Tensor) -> Tensor:
         norm_x = x.norm(2, dim=1, keepdim=True)
@@ -266,6 +267,18 @@ class LayerNorm(nn.Module):
         return self.weight[:, None, None] * x + self.bias[:, None, None]
 
 
+class DyT(nn.Module):
+    def __init__(self, num_features, alpha_init_value=0.5):
+        super().__init__()
+        self.alpha = nn.Parameter(torch.ones([1, 1, 1]) * alpha_init_value)
+        self.weight = nn.Parameter(torch.ones([num_features, 1, 1]))
+        self.bias = nn.Parameter(torch.zeros([num_features, 1, 1]))
+
+    def forward(self, x):
+        x = torch.tanh(self.alpha * x)
+        return x * self.weight + self.bias
+
+
 class GatedCNNBlock(nn.Module):
     r"""
     modernized mambaout main unit
@@ -273,10 +286,15 @@ class GatedCNNBlock(nn.Module):
     """
 
     def __init__(
-        self, dim: int = 64, expansion_ratio: float = 8 / 3, rms_norm: bool = True
+        self, dim: int = 64, expansion_ratio: float = 8 / 3, norm_type: NormType = "rms"
     ) -> None:
         super().__init__()
-        self.norm = RMSNorm(dim) if rms_norm else LayerNorm(dim)
+        if norm_type == "rms":
+            self.norm = RMSNorm(dim)
+        elif norm_type == "dyt":
+            self.norm = DyT(dim)
+        else:
+            self.norm = LayerNorm(dim)
         hidden = int(expansion_ratio * dim)
         self.fc1 = nn.Conv2d(dim, hidden * 2, 3, 1, 1)
 
@@ -318,7 +336,7 @@ class MoSRv2(nn.Module):
         expansion_ratio: float = 1.5,
         mid_dim=32,
         unshuffle_mod: bool = True,
-        rms_norm: bool = False,
+        norm_type: NormType = "dyt",
     ) -> None:
         super().__init__()
         self.short = nn.Upsample(scale_factor=scale, mode="bilinear")
@@ -339,7 +357,7 @@ class MoSRv2(nn.Module):
             *in_to_dim
             + [
                 GatedCNNBlock(
-                    dim=dim, expansion_ratio=expansion_ratio, rms_norm=rms_norm
+                    dim=dim, expansion_ratio=expansion_ratio, norm_type=norm_type
                 )
                 for _ in range(n_block)
             ]
